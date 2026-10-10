@@ -10,8 +10,10 @@ import (
 	"go.uber.org/fx/fxevent"
 
 	"github.com/mthpedrosa/backend-challenge-go/internal/adapters/httpapi"
+	adapterpostgres "github.com/mthpedrosa/backend-challenge-go/internal/adapters/postgres"
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
 	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
+	platformpostgres "github.com/mthpedrosa/backend-challenge-go/internal/platform/postgres"
 )
 
 const (
@@ -33,6 +35,8 @@ func Options(extra ...fx.Option) fx.Option {
 
 		fx.Provide(config.Load),
 		observability.Module,
+		platformpostgres.Module,
+		adapterpostgres.Module,
 		httpapi.Module,
 
 		fx.Options(extra...),

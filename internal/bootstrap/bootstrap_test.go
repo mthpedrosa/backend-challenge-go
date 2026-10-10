@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -15,9 +16,18 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/platform/correlation"
 )
 
+func init() {
+	os.Setenv("DATABASE_URL", "postgres://test")
+	os.Setenv("HTTP_ADDR", ":0") // to avoid load failure if missing
+}
+
 func testConfig(cfg config.Config) config.Config {
+	cfg.App.Env = "test"
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	cfg.HTTP.ShutdownTimeout = 2 * time.Second
+	if cfg.DB.URL == "" {
+		cfg.DB.URL = "postgres://test"
+	}
 	return cfg
 }
 

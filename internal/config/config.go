@@ -17,6 +17,12 @@ type Config struct {
 	App  AppConfig
 	Log  LogConfig
 	HTTP HTTPConfig
+	DB   DBConfig
+}
+
+// DBConfig holds database settings.
+type DBConfig struct {
+	URL string
 }
 
 // AppConfig holds process-level settings.
@@ -74,6 +80,9 @@ func LoadFrom(lookup LookupFunc) (Config, error) {
 			IdleTimeout:       r.duration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 			ShutdownTimeout:   r.duration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
 		},
+		DB: DBConfig{
+			URL: r.string("DATABASE_URL", ""),
+		},
 	}
 
 	if err := errors.Join(append(r.errs, cfg.validate())...); err != nil {
@@ -92,6 +101,9 @@ func (c Config) validate() error {
 	}
 	if strings.TrimSpace(c.HTTP.Addr) == "" {
 		errs = append(errs, errors.New("HTTP_ADDR must not be empty"))
+	}
+	if strings.TrimSpace(c.DB.URL) == "" {
+		errs = append(errs, errors.New("DATABASE_URL must not be empty"))
 	}
 	positive := map[string]time.Duration{
 		"HTTP_READ_HEADER_TIMEOUT": c.HTTP.ReadHeaderTimeout,
