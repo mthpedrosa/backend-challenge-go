@@ -1,0 +1,29 @@
+{
+  "id": "wallet-realm",
+  "realm": "wallet-realm",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "provider-client",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "provider-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "publicClient": false
+    },
+    {
+      "clientId": "internal-client",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "internal-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "publicClient": false
+    }
+  ]
+}
