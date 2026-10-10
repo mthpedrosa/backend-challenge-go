@@ -33,8 +33,9 @@ func AsRoutes(constructor any) any {
 type RouterParams struct {
 	fx.In
 
-	Logger *slog.Logger
-	Routes []Routes `group:"routes"`
+	Logger         *slog.Logger
+	AuthMiddleware echo.MiddlewareFunc
+	Routes         []Routes `group:"routes"`
 }
 
 // NewRouter builds the Echo instance with global middlewares and all routes.
@@ -47,6 +48,9 @@ func NewRouter(p RouterParams) *echo.Echo {
 	// Order matters: correlation id first so every log line carries it, then
 	// logging, then panic recovery closest to the handlers.
 	e.Use(CorrelationID(), RequestLogger(p.Logger), Recover(p.Logger))
+
+	// Global auth middleware. Health check bypass is configured inside the middleware.
+	e.Use(p.AuthMiddleware)
 
 	for _, r := range p.Routes {
 		r.RegisterRoutes(e)

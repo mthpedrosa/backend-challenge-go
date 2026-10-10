@@ -55,6 +55,8 @@ func NewErrorHandler(logger *slog.Logger) echo.HTTPErrorHandler {
 				status = http.StatusConflict
 			case "WALLET_NOT_FOUND", "TRANSACTION_NOT_FOUND":
 				status = http.StatusNotFound
+			case domain.CodeUnauthorized:
+				status = http.StatusUnauthorized
 			}
 
 			// If it's a rejected transaction, we return 200 OK with the rejection data

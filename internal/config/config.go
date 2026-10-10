@@ -18,6 +18,12 @@ type Config struct {
 	Log  LogConfig
 	HTTP HTTPConfig
 	DB   DBConfig
+	Auth AuthConfig
+}
+
+// AuthConfig holds the OAuth2/OIDC settings.
+type AuthConfig struct {
+	JWKSURL string
 }
 
 // DBConfig holds database settings.
@@ -83,6 +89,9 @@ func LoadFrom(lookup LookupFunc) (Config, error) {
 		DB: DBConfig{
 			URL: r.string("DATABASE_URL", ""),
 		},
+		Auth: AuthConfig{
+			JWKSURL: r.string("JWKS_URL", ""),
+		},
 	}
 
 	if err := errors.Join(append(r.errs, cfg.validate())...); err != nil {
@@ -104,6 +113,9 @@ func (c Config) validate() error {
 	}
 	if strings.TrimSpace(c.DB.URL) == "" {
 		errs = append(errs, errors.New("DATABASE_URL must not be empty"))
+	}
+	if strings.TrimSpace(c.Auth.JWKSURL) == "" {
+		errs = append(errs, errors.New("JWKS_URL must not be empty"))
 	}
 	positive := map[string]time.Duration{
 		"HTTP_READ_HEADER_TIMEOUT": c.HTTP.ReadHeaderTimeout,
