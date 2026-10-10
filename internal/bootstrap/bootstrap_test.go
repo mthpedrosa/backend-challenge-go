@@ -21,6 +21,7 @@ func init() {
 	os.Setenv("HTTP_ADDR", ":0") // to avoid load failure if missing
 	os.Setenv("JWKS_URL", "mock")
 	os.Setenv("SQS_OUTBOX_QUEUE_URL", "http://sqs")
+	os.Setenv("SQS_INBOX_QUEUE_URL", "http://sqs-inbox")
 }
 
 func testConfig(cfg config.Config) config.Config {
