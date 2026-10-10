@@ -15,6 +15,7 @@ const (
 	CodeInvalidStateTransition = "INVALID_STATE_TRANSITION"
 	CodeInvalidLedgerEntry     = "INVALID_LEDGER_ENTRY"
 	CodeInvalidWalletState     = "INVALID_WALLET_STATE"
+	CodeUnauthorized           = "UNAUTHORIZED"
 
 	// Permanent business rejections (persisted as REJECTED with stable failureCode)
 	CodeInsufficientFunds         = "INSUFFICIENT_FUNDS"
