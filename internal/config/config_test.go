@@ -15,7 +15,10 @@ func lookupFrom(m map[string]string) LookupFunc {
 }
 
 func TestLoadFrom_Defaults(t *testing.T) {
-	cfg, err := LoadFrom(lookupFrom(map[string]string{"APP_INSTANCE_ID": "test-1"}))
+	cfg, err := LoadFrom(lookupFrom(map[string]string{
+		"APP_INSTANCE_ID": "test-1",
+		"DATABASE_URL":    "postgres://u:p@localhost:5432/db",
+	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,6 +41,7 @@ func TestLoadFrom_Overrides(t *testing.T) {
 		"HTTP_ADDR":             "127.0.0.1:9090",
 		"LOG_LEVEL":             "debug",
 		"HTTP_SHUTDOWN_TIMEOUT": "3s",
+		"DATABASE_URL":          "postgres://override",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

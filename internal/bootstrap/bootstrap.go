@@ -12,6 +12,7 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/adapters/httpapi"
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
 	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/postgres"
 )
 
 const (
@@ -33,6 +34,7 @@ func Options(extra ...fx.Option) fx.Option {
 
 		fx.Provide(config.Load),
 		observability.Module,
+		postgres.Module,
 		httpapi.Module,
 
 		fx.Options(extra...),
