@@ -7,6 +7,7 @@ var Module = fx.Module("httpapi",
 	fx.Provide(
 		NewRouter,
 		NewServer,
+		NewAuthMiddleware,
 		AsRoutes(NewHealthHandler),
 		AsRoutes(NewWalletHandler),
 		AsRoutes(NewWagerHandler),
