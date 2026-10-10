@@ -11,6 +11,7 @@ import (
 
 	"github.com/mthpedrosa/backend-challenge-go/internal/adapters/httpapi"
 	adapterpostgres "github.com/mthpedrosa/backend-challenge-go/internal/adapters/postgres"
+	"github.com/mthpedrosa/backend-challenge-go/internal/adapters/sqsconsumer"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/worker"
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
@@ -43,6 +44,7 @@ func Options(extra ...fx.Option) fx.Option {
 		adapterpostgres.Module,
 		usecase.Module,
 		worker.Module,
+		sqsconsumer.Module,
 		httpapi.Module,
 
 		fx.Options(extra...),

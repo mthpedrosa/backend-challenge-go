@@ -1,9 +1,10 @@
 -- +goose Up
 CREATE TABLE inbox (
-    message_id VARCHAR(255) NOT NULL,
     consumer_name VARCHAR(255) NOT NULL,
+    message_id VARCHAR(255) NOT NULL,
+    payload_hash TEXT NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
     PRIMARY KEY (consumer_name, message_id)
 );
 

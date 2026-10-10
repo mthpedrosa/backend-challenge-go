@@ -20,6 +20,7 @@ func TestLoadFrom_Defaults(t *testing.T) {
 		"DATABASE_URL":         "postgres://u:p@localhost:5432/db",
 		"JWKS_URL":             "http://mock",
 		"SQS_OUTBOX_QUEUE_URL": "http://mock-sqs",
+		"SQS_INBOX_QUEUE_URL":  "http://mock-inbox-sqs",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

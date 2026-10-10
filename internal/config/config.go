@@ -29,6 +29,7 @@ type AWSConfig struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	OutboxQueueURL  string
+	InboxQueueURL   string
 }
 
 // AuthConfig holds the OAuth2/OIDC settings.
@@ -108,6 +109,7 @@ func LoadFrom(lookup LookupFunc) (Config, error) {
 			AccessKeyID:     r.string("AWS_ACCESS_KEY_ID", ""),
 			SecretAccessKey: r.string("AWS_SECRET_ACCESS_KEY", ""),
 			OutboxQueueURL:  r.string("SQS_OUTBOX_QUEUE_URL", ""),
+			InboxQueueURL:   r.string("SQS_INBOX_QUEUE_URL", ""),
 		},
 	}
 
