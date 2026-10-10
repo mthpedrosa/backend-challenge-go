@@ -198,3 +198,68 @@ func (r *WagerRepository) scanOne(ctx context.Context, query string, args ...any
 
 	return t, nil
 }
+
+func (r *WagerRepository) FindPendingReferences(ctx context.Context, limit int) ([]*wager.Transaction, error) {
+	query := r.baseSelectQuery() + `
+		WHERE status = 'PENDING_REFERENCE' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		ORDER BY next_attempt_at ASC NULLS FIRST
+		LIMIT $1
+	`
+	runner := getRunner(ctx, r.pool)
+	rows, err := runner.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending references: %w", err)
+	}
+	defer rows.Close()
+
+	var txs []*wager.Transaction
+	for rows.Next() {
+		var (
+			id, origin, kind, status, walletID, playerID                                      string
+			amountCents                                                                       int64
+			currency                                                                          string
+			providerID, extTxID, idempKey, hash, roundID, gameID, refExtID, refTxID, failCode *string
+			balAfter                                                                          *int64
+			attempts                                                                          int
+			nextAttempt, expiresAt                                                            *time.Time
+			createdAt, updatedAt                                                              time.Time
+		)
+
+		err := rows.Scan(
+			&id, &origin, &kind, &status, &walletID, &playerID, &amountCents, &currency,
+			&providerID, &extTxID, &idempKey, &hash,
+			&roundID, &gameID, &refExtID, &refTxID,
+			&failCode, &balAfter, &attempts, &nextAttempt, &expiresAt,
+			&createdAt, &updatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan pending reference transaction: %w", err)
+		}
+
+		amt, err := money.FromMinor(amountCents, currency)
+		if err != nil {
+			return nil, fmt.Errorf("invalid amount money in database: %w", err)
+		}
+
+		var balAfterMoney *money.Money
+		if balAfter != nil {
+			m, err := money.FromMinor(*balAfter, currency)
+			if err != nil {
+				return nil, fmt.Errorf("invalid balance_after money in database: %w", err)
+			}
+			balAfterMoney = &m
+		}
+
+		t := wager.Rehydrate(
+			id, wager.Origin(origin), wager.Kind(kind), wager.Status(status),
+			walletID, playerID, amt,
+			providerID, extTxID, idempKey, hash, roundID, gameID,
+			refExtID, refTxID, failCode, balAfterMoney,
+			attempts, nextAttempt, expiresAt,
+			createdAt, updatedAt,
+		)
+		txs = append(txs, t)
+	}
+
+	return txs, rows.Err()
+}

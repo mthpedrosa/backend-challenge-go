@@ -16,6 +16,9 @@ type Repository interface {
 	// FindByIdempotencyKey retrieves a transaction by its idempotency key.
 	FindByIdempotencyKey(ctx context.Context, key string) (*Transaction, error)
 
+	// FindPendingReferences retrieves transactions waiting for a reference.
+	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
+
 	// Update saves changes to an existing transaction.
 	Update(ctx context.Context, t *Transaction) error
 }

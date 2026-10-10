@@ -20,6 +20,7 @@ func init() {
 	os.Setenv("DATABASE_URL", "postgres://test")
 	os.Setenv("HTTP_ADDR", ":0") // to avoid load failure if missing
 	os.Setenv("JWKS_URL", "mock")
+	os.Setenv("SQS_OUTBOX_QUEUE_URL", "http://sqs")
 }
 
 func testConfig(cfg config.Config) config.Config {

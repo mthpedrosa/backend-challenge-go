@@ -9,5 +9,6 @@ var Module = fx.Module("usecase",
 		NewReadWalletUseCase,
 		NewReadLedgerUseCase,
 		NewReadWagerUseCase,
+		NewResolvePendingReferenceUseCase,
 	),
 )
