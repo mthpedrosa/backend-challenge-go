@@ -199,3 +199,90 @@ func TestValidateReversalReference(t *testing.T) {
 		t.Errorf("expected INVALID_REFERENCE_KIND when refunding a WIN, got %v", err)
 	}
 }
+
+func TestRehydrateAndGetters(t *testing.T) {
+	now := time.Now()
+	next := now.Add(time.Minute)
+	exp := now.Add(10 * time.Minute)
+	refExt := "ref-ext-1"
+	m100, _ := money.Parse("100.00", money.CurrencyBRL)
+	m50, _ := money.Parse("50.00", money.CurrencyBRL)
+
+	tx := Rehydrate(
+		"tx-1", OriginExternal, KindBet, StatusPendingReference,
+		"w-1", "p-1", m100,
+		func() *string { p := "provider-a"; return &p }(),
+		func() *string { e := "ext-1"; return &e }(),
+		func() *string { i := "idemp-1"; return &i }(),
+		func() *string { h := "hash-1"; return &h }(),
+		func() *string { r := "round-1"; return &r }(),
+		func() *string { g := "game-1"; return &g }(),
+		&refExt,
+		func() *string { rt := "ref-tx-1"; return &rt }(),
+		func() *string { fc := "FAIL_01"; return &fc }(),
+		&m50,
+		3, &next, &exp, now, now,
+	)
+
+	// Test all getters
+	if tx.ID() != "tx-1" { t.Errorf("ID mismatch") }
+	if tx.Origin() != OriginExternal { t.Errorf("Origin mismatch") }
+	if tx.Kind() != KindBet { t.Errorf("Kind mismatch") }
+	if tx.Status() != StatusPendingReference { t.Errorf("Status mismatch") }
+	if tx.WalletID() != "w-1" { t.Errorf("WalletID mismatch") }
+	if tx.PlayerID() != "p-1" { t.Errorf("PlayerID mismatch") }
+	if tx.Amount() != m100 { t.Errorf("Amount mismatch") }
+	if *tx.ProviderID() != "provider-a" { t.Errorf("ProviderID mismatch") }
+	if *tx.ExternalTransactionID() != "ext-1" { t.Errorf("ExternalTransactionID mismatch") }
+	if *tx.IdempotencyKey() != "idemp-1" { t.Errorf("IdempotencyKey mismatch") }
+	if *tx.PayloadHash() != "hash-1" { t.Errorf("PayloadHash mismatch") }
+	if *tx.RoundID() != "round-1" { t.Errorf("RoundID mismatch") }
+	if *tx.GameID() != "game-1" { t.Errorf("GameID mismatch") }
+	if *tx.ReferenceExternalTransactionID() != "ref-ext-1" { t.Errorf("ReferenceExternalTransactionID mismatch") }
+	if *tx.ReferenceTransactionID() != "ref-tx-1" { t.Errorf("ReferenceTransactionID mismatch") }
+	if *tx.FailureCode() != "FAIL_01" { t.Errorf("FailureCode mismatch") }
+	if tx.BalanceAfter() == nil || *tx.BalanceAfter() != m50 { t.Errorf("BalanceAfter mismatch") }
+	if tx.Attempts() != 3 { t.Errorf("Attempts mismatch") }
+	if tx.NextAttemptAt() == nil || !tx.NextAttemptAt().Equal(next) { t.Errorf("NextAttemptAt mismatch") }
+	if tx.ExpiresAt() == nil || !tx.ExpiresAt().Equal(exp) { t.Errorf("ExpiresAt mismatch") }
+	if !tx.CreatedAt().Equal(now) { t.Errorf("CreatedAt mismatch") }
+	if !tx.UpdatedAt().Equal(now) { t.Errorf("UpdatedAt mismatch") }
+	if tx.Status().IsTerminal() { t.Errorf("Should not be terminal") }
+}
+
+func TestRemainingTransitions(t *testing.T) {
+	now := time.Now()
+	m25, _ := money.Parse("25.00", money.CurrencyBRL)
+	
+	t.Run("MarkRejected", func(t *testing.T) {
+		p := validExternalParams(KindBet, m25)
+		tx, _ := NewExternal(p)
+		
+		err := tx.MarkRejected("INSUFFICIENT_FUNDS", now)
+		if err != nil { t.Fatalf("unexpected error: %v", err) }
+		if tx.Status() != StatusRejected { t.Errorf("want REJECTED") }
+		if *tx.FailureCode() != "INSUFFICIENT_FUNDS" { t.Errorf("want failure code") }
+		if !tx.Status().IsTerminal() { t.Errorf("want terminal") }
+	})
+
+	t.Run("MarkFailed", func(t *testing.T) {
+		p := validExternalParams(KindBet, m25)
+		tx, _ := NewExternal(p)
+		
+		err := tx.MarkFailed(now)
+		if err != nil { t.Fatalf("unexpected error: %v", err) }
+		if tx.Status() != StatusFailed { t.Errorf("want FAILED") }
+		if !tx.Status().IsTerminal() { t.Errorf("want terminal") }
+	})
+
+	t.Run("IncrementAttempts", func(t *testing.T) {
+		p := validExternalParams(KindBet, m25)
+		tx, _ := NewExternal(p)
+		
+		next := now.Add(5 * time.Minute)
+		tx.IncrementAttempts(next, now)
+		
+		if tx.Attempts() != 1 { t.Errorf("want 1 attempt") }
+		if !tx.NextAttemptAt().Equal(next) { t.Errorf("want next attempt") }
+	})
+}
