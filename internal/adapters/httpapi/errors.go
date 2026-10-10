@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"github.com/mthpedrosa/backend-challenge-go/internal/domain"
 )
 
 // ErrorBody is the JSON envelope returned for every error response.
@@ -42,7 +43,25 @@ func NewErrorHandler(logger *slog.Logger) echo.HTTPErrorHandler {
 		}}
 
 		var he *echo.HTTPError
-		if errors.As(err, &he) {
+		var de *domain.DomainError
+		if errors.As(err, &de) {
+			status = http.StatusUnprocessableEntity // default 422
+
+			// Custom mappings based on domain rules
+			switch de.Code {
+			case domain.CodeInvalidAmount, domain.CodeCurrencyMismatch, domain.CodeInvalidKind, "PLAYER_WALLET_MISMATCH", "INVALID_WALLET_STATE":
+				status = http.StatusBadRequest
+			case "WALLET_ALREADY_EXISTS", "IDEMPOTENCY_CONFLICT":
+				status = http.StatusConflict
+			case "WALLET_NOT_FOUND", "TRANSACTION_NOT_FOUND":
+				status = http.StatusNotFound
+			}
+
+			// If it's a rejected transaction, we return 200 OK with the rejection data
+			// Wait, the challenge says REJECTED is a 200 OK with `{"status":"REJECTED","failureCode":...}` but this is for wager endpoint.
+			// Let's just map domain errors normally here. The handler will return 200 OK for REJECTED transactions.
+			body.Error = ErrorDetail{Code: de.Code, Message: de.Message}
+		} else if errors.As(err, &he) {
 			status = he.Code
 			body.Error = ErrorDetail{Code: codeForStatus(he.Code), Message: http.StatusText(he.Code)}
 		} else {
