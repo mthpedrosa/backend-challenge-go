@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mthpedrosa/backend-challenge-go/internal/domain/port"
 )
 
 type txKey struct{}
@@ -17,7 +18,7 @@ type TxManagerImpl struct {
 }
 
 // NewTxManager creates a new Postgres transaction manager.
-func NewTxManager(pool *pgxpool.Pool) *TxManagerImpl {
+func NewTxManager(pool *pgxpool.Pool) port.TxManager {
 	return &TxManagerImpl{pool: pool}
 }
 
