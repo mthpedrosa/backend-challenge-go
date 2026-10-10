@@ -12,7 +12,9 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/adapters/httpapi"
 	adapterpostgres "github.com/mthpedrosa/backend-challenge-go/internal/adapters/postgres"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
+	"github.com/mthpedrosa/backend-challenge-go/internal/app/worker"
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/aws"
 	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 	platformpostgres "github.com/mthpedrosa/backend-challenge-go/internal/platform/postgres"
 )
@@ -35,10 +37,12 @@ func Options(extra ...fx.Option) fx.Option {
 		}),
 
 		fx.Provide(config.Load),
+		aws.Module,
 		observability.Module,
 		platformpostgres.Module,
 		adapterpostgres.Module,
 		usecase.Module,
+		worker.Module,
 		httpapi.Module,
 
 		fx.Options(extra...),

@@ -7,6 +7,8 @@ services:
     environment:
       JWKS_URL: http://keycloak:8081/realms/wallet-realm/protocol/openid-connect/certs
       DATABASE_URL: postgres://${POSTGRES_USER:-wallet}:${POSTGRES_PASSWORD:-wallet}@postgres:5432/${POSTGRES_DB:-wallet}?sslmode=disable
+      AWS_ENDPOINT_URL: http://ministack:4566
+      SQS_OUTBOX_QUEUE_URL: http://ministack:4566/000000000000/outbox.fifo
     ports:
       - "${HTTP_PORT:-8080}:8080"
     depends_on:

@@ -19,6 +19,16 @@ type Config struct {
 	HTTP HTTPConfig
 	DB   DBConfig
 	Auth AuthConfig
+	AWS  AWSConfig
+}
+
+// AWSConfig holds AWS connectivity and queue settings.
+type AWSConfig struct {
+	Region          string
+	EndpointURL     string
+	AccessKeyID     string
+	SecretAccessKey string
+	OutboxQueueURL  string
 }
 
 // AuthConfig holds the OAuth2/OIDC settings.
@@ -92,6 +102,13 @@ func LoadFrom(lookup LookupFunc) (Config, error) {
 		Auth: AuthConfig{
 			JWKSURL: r.string("JWKS_URL", ""),
 		},
+		AWS: AWSConfig{
+			Region:          r.string("AWS_REGION", "us-east-1"),
+			EndpointURL:     r.string("AWS_ENDPOINT_URL", ""),
+			AccessKeyID:     r.string("AWS_ACCESS_KEY_ID", ""),
+			SecretAccessKey: r.string("AWS_SECRET_ACCESS_KEY", ""),
+			OutboxQueueURL:  r.string("SQS_OUTBOX_QUEUE_URL", ""),
+		},
 	}
 
 	if err := errors.Join(append(r.errs, cfg.validate())...); err != nil {
@@ -116,6 +133,9 @@ func (c Config) validate() error {
 	}
 	if strings.TrimSpace(c.Auth.JWKSURL) == "" {
 		errs = append(errs, errors.New("JWKS_URL must not be empty"))
+	}
+	if strings.TrimSpace(c.AWS.OutboxQueueURL) == "" {
+		errs = append(errs, errors.New("SQS_OUTBOX_QUEUE_URL must not be empty"))
 	}
 	positive := map[string]time.Duration{
 		"HTTP_READ_HEADER_TIMEOUT": c.HTTP.ReadHeaderTimeout,
