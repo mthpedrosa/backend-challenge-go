@@ -11,6 +11,7 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/money"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/wager"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/wallet"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 type OpenWalletInput struct {
@@ -61,6 +62,7 @@ func (uc *OpenWalletUseCase) Execute(ctx context.Context, input OpenWalletInput)
 		// 1. Check if wallet already exists for this player/currency to return 409
 		existing, err := uc.params.Wallets.FindByPlayerAndCurrency(txCtx, input.PlayerID, input.Currency)
 		if err == nil && existing != nil {
+			observability.Metrics.WalletDuplicatedTotal.Inc()
 			return domain.WrapDomainError("WALLET_ALREADY_EXISTS", "a wallet for this player and currency already exists", nil)
 		}
 

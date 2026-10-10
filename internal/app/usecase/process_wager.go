@@ -14,6 +14,7 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/ledger"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/money"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/wager"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 type ProcessWagerInput struct {
@@ -60,6 +61,7 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		if existingByIdem != nil {
 			if existingByIdem.ProviderID() != nil && *existingByIdem.ProviderID() == input.ProviderID {
 				if existingByIdem.PayloadHash() != nil && *existingByIdem.PayloadHash() != payloadHash {
+					observability.Metrics.IdempotencyConflictTotal.Inc()
 					return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload", nil)
 				}
 				resultTx = existingByIdem
@@ -74,6 +76,7 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		}
 		if existingByExt != nil {
 			if existingByExt.PayloadHash() != nil && *existingByExt.PayloadHash() != payloadHash {
+				observability.Metrics.IdempotencyConflictTotal.Inc()
 				return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "external transaction id reused with different payload", nil)
 			}
 			resultTx = existingByExt
@@ -243,6 +246,18 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 
 	if err != nil {
 		return nil, err
+	}
+
+	if resultTx != nil {
+		if resultTx.Status() == wager.StatusProcessed {
+			observability.Metrics.TransactionProcessedTotal.WithLabelValues(string(resultTx.Kind()), "EXTERNAL").Inc()
+		} else if resultTx.Status() == wager.StatusRejected {
+			code := ""
+			if resultTx.FailureCode() != nil {
+				code = string(*resultTx.FailureCode())
+			}
+			observability.Metrics.TransactionRejectedTotal.WithLabelValues(string(resultTx.Kind()), code).Inc()
+		}
 	}
 
 	return resultTx, nil

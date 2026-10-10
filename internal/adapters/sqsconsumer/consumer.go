@@ -16,6 +16,7 @@ import (
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/port"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 // Consumer is the SQS long-polling consumer.
@@ -130,8 +131,8 @@ func (c *Consumer) handleMessage(msg types.Message) {
 	var input usecase.ProcessWagerInput
 	if err := json.Unmarshal([]byte(*msg.Body), &input); err != nil {
 		c.logger.Error("failed to parse sqs message body", slog.Any("error", err))
-		// Invalid format goes to DLQ (no delete) or we delete to avoid poison pill?
-		// For DLQ, we should leave it or send it explicitly. We'll just leave it.
+		observability.Metrics.SQSMessagesReceivedTotal.WithLabelValues("malformed").Inc()
+		observability.Metrics.DLQMessagesTotal.Inc()
 		return
 	}
 
@@ -160,6 +161,7 @@ func (c *Consumer) handleMessage(msg types.Message) {
 			if existing.PayloadHash != payloadHash {
 				return fmt.Errorf("message %s already processed with different payload (DLQ)", messageID)
 			}
+			observability.Metrics.InboxDuplicatedTotal.Inc()
 			// Already processed (idempotency), just acknowledge
 			return nil
 		}
@@ -180,6 +182,8 @@ func (c *Consumer) handleMessage(msg types.Message) {
 
 	if err != nil {
 		c.logger.Error("failed to process message", slog.String("messageId", messageID), slog.Any("error", err))
+		observability.Metrics.SQSMessagesReceivedTotal.WithLabelValues("error").Inc()
+		observability.Metrics.DLQMessagesTotal.Inc()
 		// Leave the message so it redrives to DLQ after MaxReceiveCount
 		return
 	}
@@ -193,5 +197,6 @@ func (c *Consumer) handleMessage(msg types.Message) {
 		c.logger.Error("failed to delete message", slog.String("messageId", messageID), slog.Any("error", err))
 	} else {
 		c.logger.Debug("processed sqs message successfully", slog.String("messageId", messageID))
+		observability.Metrics.SQSMessagesReceivedTotal.WithLabelValues("success").Inc()
 	}
 }
