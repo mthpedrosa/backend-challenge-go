@@ -119,6 +119,33 @@ func (c *Consumer) startLoop() {
 	}
 }
 
+type sqsEnvelope struct {
+	MessageID  string          `json:"messageId"`
+	Type       string          `json:"type"`
+	OccurredAt string          `json:"occurredAt"`
+	Data       json.RawMessage `json:"data"`
+}
+
+type sqsMessageData struct {
+	ProviderID            string           `json:"providerId"`
+	ExternalTransactionID string           `json:"externalTransactionId"`
+	IdempotencyKey        string           `json:"idempotencyKey"`
+	PlayerID              string           `json:"playerId"`
+	WalletID              string           `json:"walletId"`
+	RoundID               string           `json:"roundId"`
+	GameID                string           `json:"gameId"`
+	Kind                  string           `json:"kind"`
+	Amount                string           `json:"amount"`
+	Currency              string           `json:"currency"`
+	Money                 *sqsMoneyPayload `json:"money"`
+	ReferenceExternalID   *string          `json:"referenceExternalTransactionId,omitempty"`
+}
+
+type sqsMoneyPayload struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
 func (c *Consumer) handleMessage(msg types.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -127,21 +154,58 @@ func (c *Consumer) handleMessage(msg types.Message) {
 		return
 	}
 
-	// Parse Payload
 	var input usecase.ProcessWagerInput
-	if err := json.Unmarshal([]byte(*msg.Body), &input); err != nil {
-		c.logger.Error("failed to parse sqs message body", slog.Any("error", err))
-		observability.Metrics.SQSMessagesReceivedTotal.WithLabelValues("malformed").Inc()
-		observability.Metrics.DLQMessagesTotal.Inc()
-		return
-	}
-
-	// Generate deterministic hash for inbox deduplication
-	payloadHash := input.GeneratePayloadHash()
 	messageID := ""
 	if msg.MessageId != nil {
 		messageID = *msg.MessageId
 	}
+
+	// 1. Try to unmarshal specification envelope: {"messageId": "...", "type": "...", "data": {...}}
+	var env sqsEnvelope
+	if err := json.Unmarshal([]byte(*msg.Body), &env); err == nil && len(env.Data) > 0 {
+		if env.MessageID != "" {
+			messageID = env.MessageID
+		}
+		var d sqsMessageData
+		if err := json.Unmarshal(env.Data, &d); err == nil && (d.ProviderID != "" || d.WalletID != "") {
+			amt := d.Amount
+			curr := d.Currency
+			if d.Money != nil {
+				if d.Money.Amount != "" {
+					amt = d.Money.Amount
+				}
+				if d.Money.Currency != "" {
+					curr = d.Money.Currency
+				}
+			}
+			input = usecase.ProcessWagerInput{
+				ProviderID:            d.ProviderID,
+				ExternalTransactionID: d.ExternalTransactionID,
+				IdempotencyKey:        d.IdempotencyKey,
+				PlayerID:              d.PlayerID,
+				WalletID:              d.WalletID,
+				Currency:              curr,
+				Amount:                amt,
+				Kind:                  d.Kind,
+				RoundID:               d.RoundID,
+				GameID:                d.GameID,
+				ReferenceExternalID:   d.ReferenceExternalID,
+			}
+		}
+	}
+
+	// 2. Fallback to flat payload if input wasn't populated from envelope
+	if input.ProviderID == "" && input.WalletID == "" {
+		if err := json.Unmarshal([]byte(*msg.Body), &input); err != nil {
+			c.logger.Error("failed to parse sqs message body", slog.Any("error", err))
+			observability.Metrics.SQSMessagesReceivedTotal.WithLabelValues("malformed").Inc()
+			observability.Metrics.DLQMessagesTotal.Inc()
+			return
+		}
+	}
+
+	// Generate deterministic hash for inbox deduplication
+	payloadHash := input.GeneratePayloadHash()
 
 	inboxMsg := port.InboxMessage{
 		ConsumerName: "wager-transactions",

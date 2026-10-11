@@ -200,10 +200,26 @@ func (r *WagerRepository) scanOne(ctx context.Context, query string, args ...any
 }
 
 func (r *WagerRepository) FindPendingReferences(ctx context.Context, limit int) ([]*wager.Transaction, error) {
-	query := r.baseSelectQuery() + `
-		WHERE status = 'PENDING_REFERENCE' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
-		ORDER BY next_attempt_at ASC NULLS FIRST
-		LIMIT $1
+	query := `
+		UPDATE wager_transactions
+		SET 
+			attempts = attempts + 1,
+			next_attempt_at = NOW() + INTERVAL '10 seconds',
+			updated_at = NOW()
+		WHERE id IN (
+			SELECT id
+			FROM wager_transactions
+			WHERE status = 'PENDING_REFERENCE' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+			ORDER BY next_attempt_at ASC NULLS FIRST
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING 
+			id, origin, kind, status, wallet_id, player_id, amount, currency,
+			provider_id, external_transaction_id, idempotency_key, payload_hash,
+			round_id, game_id, reference_external_transaction_id, reference_transaction_id,
+			failure_code, balance_after, attempts, next_attempt_at, expires_at,
+			created_at, updated_at
 	`
 	runner := getRunner(ctx, r.pool)
 	rows, err := runner.Query(ctx, query, limit)
@@ -262,4 +278,28 @@ func (r *WagerRepository) FindPendingReferences(ctx context.Context, limit int) 
 	}
 
 	return txs, rows.Err()
+}
+
+func (r *WagerRepository) HasProcessedReversal(ctx context.Context, referenceTransactionID string, excludeTxID string) (bool, error) {
+	runner := getRunner(ctx, r.pool)
+
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM wager_transactions
+			WHERE reference_transaction_id = $1
+			  AND kind IN ('REFUND', 'ROLLBACK')
+			  AND status = 'PROCESSED'
+	`
+	args := []any{referenceTransactionID}
+	if excludeTxID != "" {
+		query += ` AND id != $2 `
+		args = append(args, excludeTxID)
+	}
+	query += `)`
+
+	var exists bool
+	if err := runner.QueryRow(ctx, query, args...).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check processed reversal: %w", err)
+	}
+	return exists, nil
 }

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
@@ -24,18 +25,24 @@ func (h *WagerHandler) RegisterRoutes(e *echo.Echo) {
 	e.GET("/providers/:providerId/wagering/transactions/:externalTransactionId", h.GetExternalTransaction)
 }
 
+type MoneyRequestDTO struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
 type ProcessWagerRequest struct {
-	ProviderID            string  `json:"providerId"`
-	ExternalTransactionID string  `json:"externalTransactionId"`
-	IdempotencyKey        string  `json:"idempotencyKey"`
-	PlayerID              string  `json:"playerId"`
-	WalletID              string  `json:"walletId"`
-	Currency              string  `json:"currency"`
-	Amount                string  `json:"amount"`
-	Kind                  string  `json:"kind"`
-	RoundID               string  `json:"roundId"`
-	GameID                string  `json:"gameId"`
-	ReferenceExternalID   *string `json:"referenceExternalTransactionId,omitempty"`
+	ProviderID            string           `json:"providerId"`
+	ExternalTransactionID string           `json:"externalTransactionId"`
+	IdempotencyKey        string           `json:"idempotencyKey"`
+	PlayerID              string           `json:"playerId"`
+	WalletID              string           `json:"walletId"`
+	Currency              string           `json:"currency"`
+	Amount                string           `json:"amount"`
+	Money                 *MoneyRequestDTO `json:"money"`
+	Kind                  string           `json:"kind"`
+	RoundID               string           `json:"roundId"`
+	GameID                string           `json:"gameId"`
+	ReferenceExternalID   *string          `json:"referenceExternalTransactionId,omitempty"`
 }
 
 type ProcessWagerResponse struct {
@@ -54,18 +61,37 @@ func (h *WagerHandler) ProcessWager(c echo.Context) error {
 	}
 
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" && caller.ClientID != req.ProviderID {
+	if !caller.IsInternal && caller.ClientID != req.ProviderID {
 		return domain.WrapDomainError(domain.CodeForbidden, "provider ID mismatch with authenticated client", nil)
+	}
+
+	idemKey := strings.TrimSpace(c.Request().Header.Get("Idempotency-Key"))
+	if idemKey == "" {
+		idemKey = strings.TrimSpace(req.IdempotencyKey)
+	}
+	if idemKey == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "missing mandatory Idempotency-Key header")
+	}
+
+	amt := req.Amount
+	curr := req.Currency
+	if req.Money != nil {
+		if req.Money.Amount != "" {
+			amt = req.Money.Amount
+		}
+		if req.Money.Currency != "" {
+			curr = req.Money.Currency
+		}
 	}
 
 	result, err := h.processWagerUC.Execute(c.Request().Context(), usecase.ProcessWagerInput{
 		ProviderID:            req.ProviderID,
 		ExternalTransactionID: req.ExternalTransactionID,
-		IdempotencyKey:        req.IdempotencyKey,
+		IdempotencyKey:        idemKey,
 		PlayerID:              req.PlayerID,
 		WalletID:              req.WalletID,
-		Currency:              req.Currency,
-		Amount:                req.Amount,
+		Currency:              curr,
+		Amount:                amt,
 		Kind:                  req.Kind,
 		RoundID:               req.RoundID,
 		GameID:                req.GameID,
@@ -144,7 +170,7 @@ func (h *WagerHandler) GetTransaction(c echo.Context) error {
 	}
 
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" && tx.ProviderID() != nil && *tx.ProviderID() != caller.ClientID {
+	if !caller.IsInternal && tx.ProviderID() != nil && *tx.ProviderID() != caller.ClientID {
 		return domain.WrapDomainError(domain.CodeNotFound, "transaction not found", nil)
 	}
 
@@ -156,7 +182,7 @@ func (h *WagerHandler) GetExternalTransaction(c echo.Context) error {
 	extID := c.Param("externalTransactionId")
 
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" && caller.ClientID != providerID {
+	if !caller.IsInternal && caller.ClientID != providerID {
 		return domain.WrapDomainError(domain.CodeForbidden, "forbidden provider access", nil)
 	}
 

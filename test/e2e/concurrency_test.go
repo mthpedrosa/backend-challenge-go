@@ -116,11 +116,17 @@ func openWallet(t *testing.T, token, playerID, initialBalance string) string {
 		t.Fatalf("failed to open wallet: status %d, body %s", resp.StatusCode, string(respBody))
 	}
 
-	var res map[string]string
+	var res struct {
+		WalletID string `json:"walletId"`
+		ID       string `json:"id"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		t.Fatalf("failed to decode open wallet response: %v", err)
 	}
-	return res["walletId"]
+	if res.WalletID != "" {
+		return res.WalletID
+	}
+	return res.ID
 }
 
 func reconcileWallet(t *testing.T, token, walletID string) ReconcileResponse {
