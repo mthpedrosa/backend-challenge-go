@@ -21,7 +21,7 @@ func NewOutboxRepository(pool *pgxpool.Pool) event.OutboxRepository {
 func (r *OutboxRepository) Save(ctx context.Context, e event.Envelope) error {
 	runner := getRunner(ctx, r.pool)
 
-	payloadBytes, err := json.Marshal(e)
+	payloadBytes, err := json.Marshal(e.Data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event payload: %w", err)
 	}
@@ -79,21 +79,31 @@ func (r *OutboxRepository) LeaseUnpublished(ctx context.Context, batchSize int) 
 	for rows.Next() {
 		var e event.Envelope
 		var payload []byte
+		var attempts int
 		if err := rows.Scan(
 			&e.EventID,
 			&e.EventType,
 			&e.AggregateID,
 			&payload,
 			&e.OccurredAt,
-			&e.Version, // reuse version for attempts in this context if we want, or just ignore.
-			// Let's just scan properly to avoid issues.
+			&attempts,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan outbox event: %w", err)
 		}
-		// Unmarshal payload if we wanted, but the SQS publisher only needs the raw JSON string
-		// Wait, we need to send the payload to SQS. The Envelope type expects Data to be 'any'.
-		// Since we marshal it into JSON again, we can just put a json.RawMessage in Data.
-		e.Data = json.RawMessage(payload)
+		e.Version = 1
+
+		// If legacy payload contains a full envelope, extract inner data
+		var rawMap map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &rawMap); err == nil {
+			if innerData, ok := rawMap["data"]; ok && rawMap["eventId"] != nil {
+				e.Data = innerData
+			} else {
+				e.Data = json.RawMessage(payload)
+			}
+		} else {
+			e.Data = json.RawMessage(payload)
+		}
+
 		events = append(events, e)
 	}
 

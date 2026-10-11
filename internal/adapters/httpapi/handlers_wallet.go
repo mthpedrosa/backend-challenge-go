@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
@@ -31,50 +33,91 @@ func (h *WalletHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/wallets/:walletId/reconciliation", h.ReconcileWallet)
 }
 
+type InitialBalanceDTO struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
 type OpenWalletRequest struct {
 	PlayerID       string `json:"playerId"`
 	Currency       string `json:"currency"`
-	InitialBalance string `json:"initialBalance"`
+	InitialBalance any    `json:"initialBalance"`
 }
 
 type OpenWalletResponse struct {
-	WalletID string `json:"walletId"`
+	ID       string        `json:"id"`
+	WalletID string        `json:"walletId"`
+	PlayerID string        `json:"playerId"`
+	Balance  MoneyResponse `json:"balance"`
+	Version  int64         `json:"version"`
 }
 
 func (h *WalletHandler) OpenWallet(c echo.Context) error {
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" {
+	if !caller.IsInternal {
 		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
 	}
 
-	var req OpenWalletRequest
-	if err := c.Bind(&req); err != nil {
+	var raw map[string]any
+	if err := c.Bind(&raw); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
+	playerID, _ := raw["playerId"].(string)
+	currency, _ := raw["currency"].(string)
+	initialBalanceStr := "0.00"
+
+	if ib, ok := raw["initialBalance"]; ok {
+		switch v := ib.(type) {
+		case string:
+			initialBalanceStr = v
+		case map[string]any:
+			if a, ok := v["amount"].(string); ok {
+				initialBalanceStr = a
+			}
+			if cur, ok := v["currency"].(string); ok && cur != "" {
+				currency = cur
+			}
+		}
+	}
+
+	if currency == "" {
+		currency = "BRL"
+	}
+
 	w, err := h.openWalletUC.Execute(c.Request().Context(), usecase.OpenWalletInput{
-		PlayerID:       req.PlayerID,
-		Currency:       req.Currency,
-		InitialBalance: req.InitialBalance,
+		PlayerID:       playerID,
+		Currency:       currency,
+		InitialBalance: initialBalanceStr,
 	})
 	if err != nil {
 		return err // handled by ErrorHandler
 	}
 
-	return c.JSON(http.StatusCreated, OpenWalletResponse{WalletID: w.ID()})
+	return c.JSON(http.StatusCreated, OpenWalletResponse{
+		ID:       w.ID(),
+		WalletID: w.ID(),
+		PlayerID: w.PlayerID(),
+		Balance: MoneyResponse{
+			Amount:   w.Balance().FormatDecimal(),
+			Currency: w.Currency(),
+		},
+		Version: w.Version(),
+	})
 }
 
 type WalletResponse struct {
-	WalletID string `json:"walletId"`
-	PlayerID string `json:"playerId"`
-	Balance  string `json:"balance"`
-	Currency string `json:"currency"`
-	Version  int64  `json:"version"`
+	ID       string        `json:"id"`
+	WalletID string        `json:"walletId"`
+	PlayerID string        `json:"playerId"`
+	Balance  MoneyResponse `json:"balance"`
+	Currency string        `json:"currency"`
+	Version  int64         `json:"version"`
 }
 
 func (h *WalletHandler) GetWallet(c echo.Context) error {
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" {
+	if !caller.IsInternal {
 		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
 	}
 
@@ -85,9 +128,13 @@ func (h *WalletHandler) GetWallet(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, WalletResponse{
+		ID:       w.ID(),
 		WalletID: w.ID(),
 		PlayerID: w.PlayerID(),
-		Balance:  w.Balance().FormatDecimal(),
+		Balance: MoneyResponse{
+			Amount:   w.Balance().FormatDecimal(),
+			Currency: w.Currency(),
+		},
 		Currency: w.Currency(),
 		Version:  w.Version(),
 	})
@@ -110,14 +157,22 @@ type LedgerResponse struct {
 
 func (h *WalletHandler) GetLedger(c echo.Context) error {
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" {
+	if !caller.IsInternal {
 		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
 	}
 
 	id := c.Param("walletId")
 	cursor := c.QueryParam("cursor")
-	// Use 50 as default
 	limit := 50
+	if lStr := c.QueryParam("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			if l > 100 {
+				limit = 100
+			} else {
+				limit = l
+			}
+		}
+	}
 
 	entries, err := h.readLedgerUC.Execute(c.Request().Context(), id, cursor, limit)
 	if err != nil {
@@ -137,11 +192,13 @@ func (h *WalletHandler) GetLedger(c echo.Context) error {
 		})
 	}
 
-	// Basic implementation for cursor (using the last item ID as next cursor if we got the limit, though we'd typically fetch limit+1)
 	var nextCursor *string
 	if len(entries) == limit && limit > 0 {
-		cursorStr := entries[len(entries)-1].ID()
-		nextCursor = &cursorStr
+		lastEntry := entries[len(entries)-1]
+		// Opaque base64 cursor encoding timestamp + id
+		rawToken := lastEntry.CreatedAt().Format("2006-01-02T15:04:05.999999999Z07:00") + "|" + lastEntry.ID()
+		b64 := base64.URLEncoding.EncodeToString([]byte(rawToken))
+		nextCursor = &b64
 	}
 
 	if res == nil {
@@ -170,7 +227,7 @@ type ReconcileWalletResponse struct {
 
 func (h *WalletHandler) ReconcileWallet(c echo.Context) error {
 	caller := GetCallerInfo(c)
-	if !caller.IsInternal && caller.ClientID != "" {
+	if !caller.IsInternal {
 		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
 	}
 

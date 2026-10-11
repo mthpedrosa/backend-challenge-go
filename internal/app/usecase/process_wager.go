@@ -106,6 +106,10 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		}
 		if existingByIdem != nil {
 			if existingByIdem.ProviderID() != nil && *existingByIdem.ProviderID() == input.ProviderID {
+				if existingByIdem.ExternalTransactionID() != nil && *existingByIdem.ExternalTransactionID() != input.ExternalTransactionID {
+					observability.Metrics.IdempotencyConflictTotal.Inc()
+					return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "idempotency key reused with different external transaction id", nil)
+				}
 				if existingByIdem.PayloadHash() != nil && *existingByIdem.PayloadHash() != payloadHash {
 					observability.Metrics.IdempotencyConflictTotal.Inc()
 					return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload", nil)
@@ -122,6 +126,10 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 			return err
 		}
 		if existingByExt != nil {
+			if existingByExt.IdempotencyKey() != nil && *existingByExt.IdempotencyKey() != input.IdempotencyKey {
+				observability.Metrics.IdempotencyConflictTotal.Inc()
+				return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "external transaction id reused with different idempotency key", nil)
+			}
 			if existingByExt.PayloadHash() != nil && *existingByExt.PayloadHash() != payloadHash {
 				observability.Metrics.IdempotencyConflictTotal.Inc()
 				return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "external transaction id reused with different payload", nil)
@@ -132,9 +140,11 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		}
 
 		// 4. Resolve reference transaction if needed (Refund, Rollback)
+		var refTx *wager.Transaction
 		var refTxID *string
 		if input.ReferenceExternalID != nil {
-			refTx, err := uc.params.Wagers.FindByExternalID(txCtx, input.ProviderID, *input.ReferenceExternalID)
+			var err error
+			refTx, err = uc.params.Wagers.FindByExternalID(txCtx, input.ProviderID, *input.ReferenceExternalID)
 			if err != nil {
 				if errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
 					// Pending reference flow
@@ -188,11 +198,18 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 
 		// Validate reversal if applicable
 		if tx.Kind() == wager.KindRefund || tx.Kind() == wager.KindRollback {
-			// Actually we need the referenced transaction entity
-			refTx, err := uc.params.Wagers.FindByExternalID(txCtx, input.ProviderID, *input.ReferenceExternalID)
-			if err == nil {
+			if refTx != nil {
 				if err := tx.ValidateReversalReference(refTx); err != nil {
 					tx.MarkRejected(err.(*domain.DomainError).Code, now)
+				} else {
+					// Check if reference transaction has already been reversed
+					alreadyReversed, err := uc.params.Wagers.HasProcessedReversal(txCtx, refTx.ID(), "")
+					if err != nil {
+						return err
+					}
+					if alreadyReversed {
+						tx.MarkRejected(domain.CodeAlreadyReversed, now)
+					}
 				}
 			}
 		}
@@ -203,14 +220,9 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 
 		if tx.Status() == wager.StatusPending { // Only process if not already rejected
 			switch tx.Kind() {
-			case wager.KindBet, wager.KindRollback:
+			case wager.KindBet:
 				if err := w.Debit(amt, now); err != nil {
-					code := err.(*domain.DomainError).Code
-					// If rollback fails due to funds, it's a specific code
-					if code == domain.CodeInsufficientFunds && tx.Kind() == wager.KindRollback {
-						code = domain.CodeReversalInsufficientFunds
-					}
-					tx.MarkRejected(code, now)
+					tx.MarkRejected(err.(*domain.DomainError).Code, now)
 				} else {
 					balanceAfter := w.Balance()
 					tx.MarkProcessed(&balanceAfter, refTxID, now)
@@ -229,6 +241,41 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 						uuid.New().String(), w.ID(), tx.ID(), ledger.DirectionCredit,
 						amt, balanceBefore, w.Balance(), now,
 					)
+				}
+			case wager.KindRollback:
+				// ROLLBACK: movement opposite to the referenced transaction
+				// If reference was BET (debit) -> ROLLBACK credits wallet
+				// If reference was WIN or REFUND (credit) -> ROLLBACK debits wallet
+				if refTx == nil {
+					tx.MarkRejected(domain.CodeReferenceNotFound, now)
+				} else if refTx.Kind() == wager.KindBet {
+					if err := w.Credit(amt, now); err != nil {
+						tx.MarkRejected(err.(*domain.DomainError).Code, now)
+					} else {
+						balanceAfter := w.Balance()
+						tx.MarkProcessed(&balanceAfter, refTxID, now)
+						ledgerEntry, _ = ledger.NewEntry(
+							uuid.New().String(), w.ID(), tx.ID(), ledger.DirectionCredit,
+							amt, balanceBefore, w.Balance(), now,
+						)
+					}
+				} else if refTx.Kind() == wager.KindWin || refTx.Kind() == wager.KindRefund {
+					if err := w.Debit(amt, now); err != nil {
+						code := err.(*domain.DomainError).Code
+						if code == domain.CodeInsufficientFunds {
+							code = domain.CodeReversalInsufficientFunds
+						}
+						tx.MarkRejected(code, now)
+					} else {
+						balanceAfter := w.Balance()
+						tx.MarkProcessed(&balanceAfter, refTxID, now)
+						ledgerEntry, _ = ledger.NewEntry(
+							uuid.New().String(), w.ID(), tx.ID(), ledger.DirectionDebit,
+							amt, balanceBefore, w.Balance(), now,
+						)
+					}
+				} else {
+					tx.MarkRejected(domain.CodeInvalidReferenceKind, now)
 				}
 			case wager.KindLoss:
 				balanceAfter := w.Balance()

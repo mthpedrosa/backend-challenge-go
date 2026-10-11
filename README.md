@@ -218,15 +218,24 @@ curl -i -X POST http://localhost:8080/wallets \
   -H "Content-Type: application/json" \
   -d '{
     "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
-    "currency": "BRL",
-    "initialBalance": "100.00"
+    "initialBalance": {
+      "amount": "100.00",
+      "currency": "BRL"
+    }
   }'
 ```
 
 **Response (`201 Created`)**:
 ```json
 {
-  "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37"
+  "id": "0192f291-27dd-7d3f-8071-5f8685deef37",
+  "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
+  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+  "balance": {
+    "amount": "100.00",
+    "currency": "BRL"
+  },
+  "version": 1
 }
 ```
 
@@ -247,11 +256,15 @@ curl -i http://localhost:8080/wallets/0192f291-27dd-7d3f-8071-5f8685deef37 \
 **Response (`200 OK`)**:
 ```json
 {
+  "id": "0192f291-27dd-7d3f-8071-5f8685deef37",
   "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
   "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
   "currency": "BRL",
-  "balance": "100.00",
-  "version": 2
+  "balance": {
+    "amount": "100.00",
+    "currency": "BRL"
+  },
+  "version": 1
 }
 ```
 
@@ -276,14 +289,15 @@ curl -i -X POST http://localhost:8080/wagering/transactions \
   -d '{
     "providerId": "provider-client",
     "externalTransactionId": "bet-001",
-    "idempotencyKey": "provider-client:bet-001",
     "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
     "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
-    "currency": "BRL",
-    "amount": "25.00",
     "kind": "BET",
     "roundId": "round-987",
-    "gameId": "fortune-chimp"
+    "gameId": "fortune-chimp",
+    "money": {
+      "amount": "25.00",
+      "currency": "BRL"
+    }
   }'
 ```
 

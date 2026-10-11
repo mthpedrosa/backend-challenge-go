@@ -56,14 +56,19 @@ func (uc *ResolvePendingReferenceUseCase) Execute(ctx context.Context, pendingTx
 				nextAttempt := now.Add(5 * time.Second) // basic backoff could be exponential
 
 				if pendingTx.ExpiresAt() != nil && now.After(*pendingTx.ExpiresAt()) {
-					// Expired, mark as failed permanently
-					if err := pendingTx.MarkFailed(now); err != nil {
+					// Expired, mark as REJECTED with REFERENCE_NOT_FOUND per specification
+					if err := pendingTx.MarkRejected(domain.CodeReferenceNotFound, now); err != nil {
 						return err
 					}
-				} else {
-					pendingTx.IncrementAttempts(nextAttempt, now)
+					if err := uc.params.Wagers.Update(txCtx, pendingTx); err != nil {
+						return err
+					}
+					env := event.NewTransactionRejectedEvent(
+						uuid.New().String(), pendingTx, *pendingTx.FailureCode(), "worker-correlation", nil, now,
+					)
+					return uc.params.Outbox.Save(txCtx, env)
 				}
-
+				pendingTx.IncrementAttempts(nextAttempt, now)
 				return uc.params.Wagers.Update(txCtx, pendingTx)
 			}
 			return err
@@ -74,92 +79,114 @@ func (uc *ResolvePendingReferenceUseCase) Execute(ctx context.Context, pendingTx
 			// Reference is still pending itself, we can just backoff
 			nextAttempt := now.Add(5 * time.Second)
 			if pendingTx.ExpiresAt() != nil && now.After(*pendingTx.ExpiresAt()) {
-				if err := pendingTx.MarkFailed(now); err != nil {
+				if err := pendingTx.MarkRejected(domain.CodeReferenceNotFound, now); err != nil {
 					return err
 				}
-			} else {
-				pendingTx.IncrementAttempts(nextAttempt, now)
+				if err := uc.params.Wagers.Update(txCtx, pendingTx); err != nil {
+					return err
+				}
+				env := event.NewTransactionRejectedEvent(
+					uuid.New().String(), pendingTx, *pendingTx.FailureCode(), "worker-correlation", nil, now,
+				)
+				return uc.params.Outbox.Save(txCtx, env)
 			}
+			pendingTx.IncrementAttempts(nextAttempt, now)
 			return uc.params.Wagers.Update(txCtx, pendingTx)
 		}
 
 		// At this point, the reference is terminal (PROCESSED, REJECTED, FAILED).
 		// We can now validate the reversal against it.
-		// Note: The use case creates a new entity, but here we ALREADY have the entity saved!
-		// So we just call ValidateReversalReference
 		if err := pendingTx.ValidateReversalReference(refTx); err != nil {
 			pendingTx.MarkRejected(err.(*domain.DomainError).Code, now)
 		} else {
-			// If validation passes, we apply domain logic
-			// Since pendingTx is a REFUND or ROLLBACK (the only ones that use PENDING_REFERENCE)
-			// Wait, the domain rule:
-			// REFUND (credits wallet)
-			// ROLLBACK (debits wallet if it reverses a WIN/REFUND? No, ROLLBACK cancels the previous.
-			// Wait, ProcessWagerUseCase says:
-			// wager.KindBet, wager.KindRollback -> Debit
-			// wager.KindWin, wager.KindRefund -> Credit
-
-			amt := pendingTx.Amount()
-			balanceBefore := w.Balance()
-			var ledgerEntry *ledger.Entry
-
-			switch pendingTx.Kind() {
-			case wager.KindBet, wager.KindRollback:
-				if err := w.Debit(amt, now); err != nil {
-					code := err.(*domain.DomainError).Code
-					if code == domain.CodeInsufficientFunds && pendingTx.Kind() == wager.KindRollback {
-						code = domain.CodeReversalInsufficientFunds
-					}
-					pendingTx.MarkRejected(code, now)
-				} else {
-					balanceAfter := w.Balance()
-					refID := refTx.ID()
-					pendingTx.MarkProcessed(&balanceAfter, &refID, now)
-					ledgerEntry, _ = ledger.NewEntry(
-						uuid.New().String(), w.ID(), pendingTx.ID(), ledger.DirectionDebit,
-						amt, balanceBefore, w.Balance(), now,
-					)
-				}
-			case wager.KindWin, wager.KindRefund:
-				if err := w.Credit(amt, now); err != nil {
-					pendingTx.MarkRejected(err.(*domain.DomainError).Code, now)
-				} else {
-					balanceAfter := w.Balance()
-					refID := refTx.ID()
-					pendingTx.MarkProcessed(&balanceAfter, &refID, now)
-					ledgerEntry, _ = ledger.NewEntry(
-						uuid.New().String(), w.ID(), pendingTx.ID(), ledger.DirectionCredit,
-						amt, balanceBefore, w.Balance(), now,
-					)
-				}
-			default:
-				pendingTx.MarkRejected(domain.CodeInvalidKind, now)
+			// Check if reference transaction has already been reversed by another transaction
+			alreadyReversed, err := uc.params.Wagers.HasProcessedReversal(txCtx, refTx.ID(), pendingTx.ID())
+			if err != nil {
+				return err
 			}
+			if alreadyReversed {
+				pendingTx.MarkRejected(domain.CodeAlreadyReversed, now)
+			} else {
+				amt := pendingTx.Amount()
+				balanceBefore := w.Balance()
+				var ledgerEntry *ledger.Entry
 
-			// If it was processed, update wallet and ledger
-			if pendingTx.Status() == wager.StatusProcessed && ledgerEntry != nil {
-				if err := uc.params.Wallets.Update(txCtx, w); err != nil {
-					return err
-				}
-				if err := uc.params.Ledgers.Append(txCtx, ledgerEntry); err != nil {
-					return err
+				switch pendingTx.Kind() {
+				case wager.KindRefund:
+					if err := w.Credit(amt, now); err != nil {
+						pendingTx.MarkRejected(err.(*domain.DomainError).Code, now)
+					} else {
+						balanceAfter := w.Balance()
+						refID := refTx.ID()
+						pendingTx.MarkProcessed(&balanceAfter, &refID, now)
+						ledgerEntry, _ = ledger.NewEntry(
+							uuid.New().String(), w.ID(), pendingTx.ID(), ledger.DirectionCredit,
+							amt, balanceBefore, w.Balance(), now,
+						)
+					}
+				case wager.KindRollback:
+					if refTx.Kind() == wager.KindBet {
+						// Undoing a BET (debit) means CREDITING the wallet
+						if err := w.Credit(amt, now); err != nil {
+							pendingTx.MarkRejected(err.(*domain.DomainError).Code, now)
+						} else {
+							balanceAfter := w.Balance()
+							refID := refTx.ID()
+							pendingTx.MarkProcessed(&balanceAfter, &refID, now)
+							ledgerEntry, _ = ledger.NewEntry(
+								uuid.New().String(), w.ID(), pendingTx.ID(), ledger.DirectionCredit,
+								amt, balanceBefore, w.Balance(), now,
+							)
+						}
+					} else if refTx.Kind() == wager.KindWin || refTx.Kind() == wager.KindRefund {
+						// Undoing a WIN or REFUND (credit) means DEBITING the wallet
+						if err := w.Debit(amt, now); err != nil {
+							code := err.(*domain.DomainError).Code
+							if code == domain.CodeInsufficientFunds {
+								code = domain.CodeReversalInsufficientFunds
+							}
+							pendingTx.MarkRejected(code, now)
+						} else {
+							balanceAfter := w.Balance()
+							refID := refTx.ID()
+							pendingTx.MarkProcessed(&balanceAfter, &refID, now)
+							ledgerEntry, _ = ledger.NewEntry(
+								uuid.New().String(), w.ID(), pendingTx.ID(), ledger.DirectionDebit,
+								amt, balanceBefore, w.Balance(), now,
+							)
+						}
+					} else {
+						pendingTx.MarkRejected(domain.CodeInvalidReferenceKind, now)
+					}
+				default:
+					pendingTx.MarkRejected(domain.CodeInvalidKind, now)
 				}
 
-				env := event.NewWalletBalanceChangedEvent(
-					uuid.New().String(),
-					w.ID(),
-					pendingTx.ID(),
-					ledgerEntry.Direction(),
-					amt,
-					balanceBefore,
-					w.Balance(),
-					w.Version(),
-					"worker-correlation", // In a real scenario, preserve correlation id
-					nil,
-					now,
-				)
-				if err := uc.params.Outbox.Save(txCtx, env); err != nil {
-					return err
+				// If it was processed, update wallet and ledger
+				if pendingTx.Status() == wager.StatusProcessed && ledgerEntry != nil {
+					if err := uc.params.Wallets.Update(txCtx, w); err != nil {
+						return err
+					}
+					if err := uc.params.Ledgers.Append(txCtx, ledgerEntry); err != nil {
+						return err
+					}
+
+					env := event.NewWalletBalanceChangedEvent(
+						uuid.New().String(),
+						w.ID(),
+						pendingTx.ID(),
+						ledgerEntry.Direction(),
+						amt,
+						balanceBefore,
+						w.Balance(),
+						w.Version(),
+						"worker-correlation", // In a real scenario, preserve correlation id
+						nil,
+						now,
+					)
+					if err := uc.params.Outbox.Save(txCtx, env); err != nil {
+						return err
+					}
 				}
 			}
 		}

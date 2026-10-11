@@ -19,6 +19,9 @@ type Repository interface {
 	// FindPendingReferences retrieves transactions waiting for a reference.
 	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
 
+	// HasProcessedReversal checks if a reference transaction has already been reversed by a PROCESSED reversal.
+	HasProcessedReversal(ctx context.Context, referenceTransactionID string, excludeTxID string) (bool, error)
+
 	// Update saves changes to an existing transaction.
 	Update(ctx context.Context, t *Transaction) error
 }

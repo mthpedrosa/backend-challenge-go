@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,11 +58,30 @@ func (r *LedgerRepository) FindByWalletPaginated(ctx context.Context, walletID s
 	args := []any{walletID}
 
 	if cursor != "" {
-		query += ` AND l.created_at < (SELECT created_at FROM wallet_ledger WHERE id = $2) `
-		args = append(args, cursor)
+		var parsedTime time.Time
+		var parsedID string
+		decoded, err := base64.URLEncoding.DecodeString(cursor)
+		if err == nil {
+			parts := strings.SplitN(string(decoded), "|", 2)
+			if len(parts) == 2 {
+				if t, err := time.Parse("2006-01-02T15:04:05.999999999Z07:00", parts[0]); err == nil {
+					parsedTime = t
+					parsedID = parts[1]
+				}
+			}
+		}
+
+		if !parsedTime.IsZero() && parsedID != "" {
+			query += fmt.Sprintf(` AND (l.created_at < $%d OR (l.created_at = $%d AND l.id < $%d)) `, len(args)+1, len(args)+1, len(args)+2)
+			args = append(args, parsedTime, parsedID)
+		} else {
+			// Legacy fallback for plain UUID cursor
+			query += fmt.Sprintf(` AND (l.created_at < (SELECT created_at FROM wallet_ledger WHERE id = $%d) OR (l.created_at = (SELECT created_at FROM wallet_ledger WHERE id = $%d) AND l.id < $%d)) `, len(args)+1, len(args)+1, len(args)+1)
+			args = append(args, cursor)
+		}
 	}
 
-	query += ` ORDER BY l.created_at DESC LIMIT $` + fmt.Sprint(len(args)+1)
+	query += ` ORDER BY l.created_at DESC, l.id DESC LIMIT $` + fmt.Sprint(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := runner.Query(ctx, query, args...)

@@ -110,22 +110,22 @@ func GetCallerInfo(c echo.Context) CallerInfo {
 	user := c.Get("user")
 	if user == nil {
 		if id := c.Request().Header.Get("X-Client-ID"); id != "" {
-			return CallerInfo{ClientID: id, IsInternal: id == "internal-client" || id == "wallet-internal"}
+			return CallerInfo{ClientID: id, IsInternal: id == "internal-client" || id == "wallet-internal" || id == "wallet-admin"}
 		}
 		if id := c.Request().Header.Get("X-Provider-ID"); id != "" {
 			return CallerInfo{ClientID: id, IsInternal: false}
 		}
-		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+		return CallerInfo{ClientID: "", IsInternal: false}
 	}
 
 	token, ok := user.(*jwt.Token)
 	if !ok {
-		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+		return CallerInfo{ClientID: "", IsInternal: false}
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+		return CallerInfo{ClientID: "", IsInternal: false}
 	}
 
 	clientID, _ := claims["azp"].(string)
