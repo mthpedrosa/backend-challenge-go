@@ -45,17 +45,41 @@ func (uc *OpenWalletUseCase) Execute(ctx context.Context, input OpenWalletInput)
 		return nil, err
 	}
 
-	// Create the OPENING wager transaction
-	openingTxID := uuid.New().String()
-	openingTx, err := wager.NewOpening(openingTxID, walletID, input.PlayerID, initialMoney, now)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		openingTx   *wager.Transaction
+		ledgerEntry *ledger.Entry
+	)
 
-	// Opening is automatically processed
-	balanceAfter := w.Balance()
-	if err := openingTx.MarkProcessed(&balanceAfter, nil, now); err != nil {
-		return nil, err
+	if initialMoney.IsPositive() {
+		// Create the OPENING wager transaction
+		openingTxID := uuid.New().String()
+		tx, err := wager.NewOpening(openingTxID, walletID, input.PlayerID, initialMoney, now)
+		if err != nil {
+			return nil, err
+		}
+
+		// Opening is automatically processed
+		balanceAfter := w.Balance()
+		if err := tx.MarkProcessed(&balanceAfter, nil, now); err != nil {
+			return nil, err
+		}
+		openingTx = tx
+
+		zero, _ := money.Zero(input.Currency)
+		entry, err := ledger.NewEntry(
+			uuid.New().String(),
+			w.ID(),
+			openingTx.ID(),
+			ledger.DirectionCredit,
+			initialMoney,
+			zero,        // balanceBefore
+			w.Balance(), // balanceAfter
+			now,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ledgerEntry = entry
 	}
 
 	err = uc.params.TxManager.RunInTx(ctx, func(txCtx context.Context) error {
@@ -71,28 +95,44 @@ func (uc *OpenWalletUseCase) Execute(ctx context.Context, input OpenWalletInput)
 			return err
 		}
 
-		// 3. Save OPENING transaction
-		if err := uc.params.Wagers.Create(txCtx, openingTx); err != nil {
-			return err
-		}
+		// 3. If initial balance > 0, save OPENING transaction, ledger entry, and outbox events
+		if initialMoney.IsPositive() && openingTx != nil && ledgerEntry != nil {
+			if err := uc.params.Wagers.Create(txCtx, openingTx); err != nil {
+				return err
+			}
 
-		// 4. If initial balance > 0, we emit an event
-		if initialMoney.IsPositive() {
+			if err := uc.params.Ledgers.Append(txCtx, ledgerEntry); err != nil {
+				return err
+			}
+
+			// Outbox: WagerTransactionProcessed
+			processedEnv := event.NewTransactionProcessedEvent(
+				uuid.New().String(),
+				openingTx,
+				"correlation-placeholder",
+				nil,
+				now,
+			)
+			if err := uc.params.Outbox.Save(txCtx, processedEnv); err != nil {
+				return err
+			}
+
+			// Outbox: WalletBalanceChanged
 			zero, _ := money.Zero(input.Currency)
-			env := event.NewWalletBalanceChangedEvent(
+			changedEnv := event.NewWalletBalanceChangedEvent(
 				uuid.New().String(),
 				w.ID(),
-				openingTxID,
+				openingTx.ID(),
 				ledger.DirectionCredit,
 				initialMoney,
 				zero, // balanceBefore
 				w.Balance(),
 				w.Version(),
-				"correlation-placeholder", // TODO: inject correlation
+				"correlation-placeholder",
 				nil,
 				now,
 			)
-			if err := uc.params.Outbox.Save(txCtx, env); err != nil {
+			if err := uc.params.Outbox.Save(txCtx, changedEnv); err != nil {
 				return err
 			}
 		}
