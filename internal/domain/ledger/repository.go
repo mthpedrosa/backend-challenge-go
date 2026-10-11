@@ -9,4 +9,7 @@ type Repository interface {
 
 	// FindByWalletPaginated retrieves a page of ledger entries for a specific wallet.
 	FindByWalletPaginated(ctx context.Context, walletID string, cursor string, limit int) ([]*Entry, error)
+
+	// CalculateSummary returns the net balance (credits - debits in minor units) and total entry count for a wallet.
+	CalculateSummary(ctx context.Context, walletID string) (netBalanceMinor int64, count int64, err error)
 }

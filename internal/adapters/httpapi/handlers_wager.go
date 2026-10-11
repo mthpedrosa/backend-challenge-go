@@ -5,6 +5,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
+	"github.com/mthpedrosa/backend-challenge-go/internal/domain"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/wager"
 )
 
@@ -38,9 +39,12 @@ type ProcessWagerRequest struct {
 }
 
 type ProcessWagerResponse struct {
-	Status       string  `json:"status"`
-	BalanceAfter *string `json:"balanceAfter,omitempty"`
-	FailureCode  *string `json:"failureCode,omitempty"`
+	TransactionID    string         `json:"transactionId"`
+	Status           string         `json:"status"`
+	Balance          *MoneyResponse `json:"balance,omitempty"`
+	BalanceAfter     *string        `json:"balanceAfter,omitempty"`
+	FailureCode      *string        `json:"failureCode,omitempty"`
+	IdempotentReplay bool           `json:"idempotentReplay"`
 }
 
 func (h *WagerHandler) ProcessWager(c echo.Context) error {
@@ -49,7 +53,12 @@ func (h *WagerHandler) ProcessWager(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	tx, err := h.processWagerUC.Execute(c.Request().Context(), usecase.ProcessWagerInput{
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" && caller.ClientID != req.ProviderID {
+		return domain.WrapDomainError(domain.CodeForbidden, "provider ID mismatch with authenticated client", nil)
+	}
+
+	result, err := h.processWagerUC.Execute(c.Request().Context(), usecase.ProcessWagerInput{
 		ProviderID:            req.ProviderID,
 		ExternalTransactionID: req.ExternalTransactionID,
 		IdempotencyKey:        req.IdempotencyKey,
@@ -66,13 +75,20 @@ func (h *WagerHandler) ProcessWager(c echo.Context) error {
 		return err // Handled by ErrorHandler (400, 404, 409, 500)
 	}
 
+	tx := result.Transaction
 	res := ProcessWagerResponse{
-		Status: string(tx.Status()),
+		TransactionID:    tx.ID(),
+		Status:           string(tx.Status()),
+		IdempotentReplay: result.IdempotentReplay,
 	}
 
 	if tx.Status() == wager.StatusProcessed {
 		bal := tx.BalanceAfter().FormatDecimal()
 		res.BalanceAfter = &bal
+		res.Balance = &MoneyResponse{
+			Amount:   bal,
+			Currency: tx.Amount().Currency(),
+		}
 		return c.JSON(http.StatusOK, res)
 	}
 
@@ -126,12 +142,24 @@ func (h *WagerHandler) GetTransaction(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" && tx.ProviderID() != nil && *tx.ProviderID() != caller.ClientID {
+		return domain.WrapDomainError(domain.CodeNotFound, "transaction not found", nil)
+	}
+
 	return c.JSON(http.StatusOK, toTransactionResponse(tx))
 }
 
 func (h *WagerHandler) GetExternalTransaction(c echo.Context) error {
 	providerID := c.Param("providerId")
 	extID := c.Param("externalTransactionId")
+
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" && caller.ClientID != providerID {
+		return domain.WrapDomainError(domain.CodeForbidden, "forbidden provider access", nil)
+	}
+
 	tx, err := h.readWagerUC.GetByExternalID(c.Request().Context(), providerID, extID)
 	if err != nil {
 		return err

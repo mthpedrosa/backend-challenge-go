@@ -105,3 +105,24 @@ func (r *LedgerRepository) FindByWalletPaginated(ctx context.Context, walletID s
 
 	return entries, nil
 }
+
+func (r *LedgerRepository) CalculateSummary(ctx context.Context, walletID string) (int64, int64, error) {
+	runner := getRunner(ctx, r.pool)
+
+	query := `
+		SELECT 
+			COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END), 0),
+			COUNT(*)
+		FROM wallet_ledger
+		WHERE wallet_id = $1
+	`
+	var (
+		netBalance int64
+		count      int64
+	)
+	if err := runner.QueryRow(ctx, query, walletID).Scan(&netBalance, &count); err != nil {
+		return 0, 0, fmt.Errorf("failed to calculate ledger summary: %w", err)
+	}
+
+	return netBalance, count, nil
+}

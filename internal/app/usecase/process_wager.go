@@ -31,11 +31,41 @@ type ProcessWagerInput struct {
 	ReferenceExternalID   *string
 }
 
-// GeneratePayloadHash creates a SHA-256 hash of the JSON representation of the input.
+type canonicalPayload struct {
+	Amount              string  `json:"amount"`
+	Currency            string  `json:"currency"`
+	ExternalTxID        string  `json:"externalTransactionId"`
+	GameID              string  `json:"gameId"`
+	Kind                string  `json:"kind"`
+	PlayerID            string  `json:"playerId"`
+	ProviderID          string  `json:"providerId"`
+	ReferenceExternalID *string `json:"referenceExternalTransactionId,omitempty"`
+	RoundID             string  `json:"roundId"`
+	WalletID            string  `json:"walletId"`
+}
+
+// GeneratePayloadHash creates a SHA-256 hash of the canonical business fields, excluding transport & idempotency metadata.
 func (i *ProcessWagerInput) GeneratePayloadHash() string {
-	b, _ := json.Marshal(i)
+	cp := canonicalPayload{
+		Amount:              i.Amount,
+		Currency:            i.Currency,
+		ExternalTxID:        i.ExternalTransactionID,
+		GameID:              i.GameID,
+		Kind:                i.Kind,
+		PlayerID:            i.PlayerID,
+		ProviderID:          i.ProviderID,
+		ReferenceExternalID: i.ReferenceExternalID,
+		RoundID:             i.RoundID,
+		WalletID:            i.WalletID,
+	}
+	b, _ := json.Marshal(cp)
 	hash := sha256.Sum256(b)
 	return hex.EncodeToString(hash[:])
+}
+
+type ProcessWagerResult struct {
+	Transaction      *wager.Transaction
+	IdempotentReplay bool
 }
 
 type ProcessWagerUseCase struct {
@@ -46,44 +76,15 @@ func NewProcessWagerUseCase(params UseCaseParams) *ProcessWagerUseCase {
 	return &ProcessWagerUseCase{params: params}
 }
 
-func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerInput) (*wager.Transaction, error) {
+func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerInput) (*ProcessWagerResult, error) {
 	now := time.Now().UTC()
 	payloadHash := input.GeneratePayloadHash()
 
 	var resultTx *wager.Transaction
+	var isReplay bool
 
 	err := uc.params.TxManager.RunInTx(ctx, func(txCtx context.Context) error {
-		// 1. Idempotency Check by IdempotencyKey
-		existingByIdem, err := uc.params.Wagers.FindByIdempotencyKey(txCtx, input.IdempotencyKey)
-		if err != nil && !errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
-			return err
-		}
-		if existingByIdem != nil {
-			if existingByIdem.ProviderID() != nil && *existingByIdem.ProviderID() == input.ProviderID {
-				if existingByIdem.PayloadHash() != nil && *existingByIdem.PayloadHash() != payloadHash {
-					observability.Metrics.IdempotencyConflictTotal.Inc()
-					return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload", nil)
-				}
-				resultTx = existingByIdem
-				return nil
-			}
-		}
-
-		// 2. Idempotency Check by ExternalTransactionID
-		existingByExt, err := uc.params.Wagers.FindByExternalID(txCtx, input.ProviderID, input.ExternalTransactionID)
-		if err != nil && !errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
-			return err
-		}
-		if existingByExt != nil {
-			if existingByExt.PayloadHash() != nil && *existingByExt.PayloadHash() != payloadHash {
-				observability.Metrics.IdempotencyConflictTotal.Inc()
-				return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "external transaction id reused with different payload", nil)
-			}
-			resultTx = existingByExt
-			return nil
-		}
-
-		// 3. Lock Wallet
+		// 1. Lock Wallet
 		w, err := uc.params.Wallets.FindByIDForUpdate(txCtx, input.WalletID)
 		if err != nil {
 			return err
@@ -98,6 +99,38 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 			return err
 		}
 
+		// 2. Idempotency Check by IdempotencyKey (under wallet lock)
+		existingByIdem, err := uc.params.Wagers.FindByIdempotencyKey(txCtx, input.IdempotencyKey)
+		if err != nil && !errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
+			return err
+		}
+		if existingByIdem != nil {
+			if existingByIdem.ProviderID() != nil && *existingByIdem.ProviderID() == input.ProviderID {
+				if existingByIdem.PayloadHash() != nil && *existingByIdem.PayloadHash() != payloadHash {
+					observability.Metrics.IdempotencyConflictTotal.Inc()
+					return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload", nil)
+				}
+				resultTx = existingByIdem
+				isReplay = true
+				return nil
+			}
+		}
+
+		// 3. Idempotency Check by ExternalTransactionID (under wallet lock)
+		existingByExt, err := uc.params.Wagers.FindByExternalID(txCtx, input.ProviderID, input.ExternalTransactionID)
+		if err != nil && !errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
+			return err
+		}
+		if existingByExt != nil {
+			if existingByExt.PayloadHash() != nil && *existingByExt.PayloadHash() != payloadHash {
+				observability.Metrics.IdempotencyConflictTotal.Inc()
+				return domain.WrapDomainError("IDEMPOTENCY_CONFLICT", "external transaction id reused with different payload", nil)
+			}
+			resultTx = existingByExt
+			isReplay = true
+			return nil
+		}
+
 		// 4. Resolve reference transaction if needed (Refund, Rollback)
 		var refTxID *string
 		if input.ReferenceExternalID != nil {
@@ -105,7 +138,12 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 			if err != nil {
 				if errors.Is(err, domain.NewDomainError("TRANSACTION_NOT_FOUND", "")) {
 					// Pending reference flow
-					return uc.handlePendingReference(txCtx, input, amt, w.ID(), payloadHash, now)
+					pTx, err := uc.handlePendingReference(txCtx, input, amt, w.ID(), payloadHash, now)
+					if err != nil {
+						return err
+					}
+					resultTx = pTx
+					return nil
 				}
 				return err
 			}
@@ -115,7 +153,12 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 			}
 
 			if refTx.Status() == wager.StatusPending || refTx.Status() == wager.StatusPendingReference {
-				return uc.handlePendingReference(txCtx, input, amt, w.ID(), payloadHash, now)
+				pTx, err := uc.handlePendingReference(txCtx, input, amt, w.ID(), payloadHash, now)
+				if err != nil {
+					return err
+				}
+				resultTx = pTx
+				return nil
 			}
 
 			id := refTx.ID()
@@ -248,7 +291,7 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		return nil, err
 	}
 
-	if resultTx != nil {
+	if resultTx != nil && !isReplay {
 		if resultTx.Status() == wager.StatusProcessed {
 			observability.Metrics.TransactionProcessedTotal.WithLabelValues(string(resultTx.Kind()), "EXTERNAL").Inc()
 		} else if resultTx.Status() == wager.StatusRejected {
@@ -260,10 +303,13 @@ func (uc *ProcessWagerUseCase) Execute(ctx context.Context, input ProcessWagerIn
 		}
 	}
 
-	return resultTx, nil
+	return &ProcessWagerResult{
+		Transaction:      resultTx,
+		IdempotentReplay: isReplay,
+	}, nil
 }
 
-func (uc *ProcessWagerUseCase) handlePendingReference(txCtx context.Context, input ProcessWagerInput, amt money.Money, walletID, payloadHash string, now time.Time) error {
+func (uc *ProcessWagerUseCase) handlePendingReference(txCtx context.Context, input ProcessWagerInput, amt money.Money, walletID, payloadHash string, now time.Time) (*wager.Transaction, error) {
 	txID := uuid.New().String()
 	tx, err := wager.NewExternal(wager.NewExternalParams{
 		ID:                             txID,
@@ -281,7 +327,7 @@ func (uc *ProcessWagerUseCase) handlePendingReference(txCtx context.Context, inp
 		Now:                            now,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Will set nextAttemptAt and expiresAt logic
@@ -290,15 +336,15 @@ func (uc *ProcessWagerUseCase) handlePendingReference(txCtx context.Context, inp
 	tx.MarkPendingReference(nextAttempt, expiresAt, now)
 
 	if err := uc.params.Wagers.Create(txCtx, tx); err != nil {
-		return err
+		return nil, err
 	}
 
 	env := event.NewTransactionPendingReferenceEvent(
 		uuid.New().String(), tx, "correlation-placeholder", nil, now,
 	)
 	if err := uc.params.Outbox.Save(txCtx, env); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return tx, nil
 }

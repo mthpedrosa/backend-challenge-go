@@ -26,7 +26,7 @@ func NewAuthMiddleware(cfg config.Config, logger *slog.Logger) (echo.MiddlewareF
 		// Mock auth middleware for tests
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c echo.Context) error {
-				if strings.HasPrefix(c.Path(), "/health") {
+				if strings.HasPrefix(c.Path(), "/health") || c.Path() == "/metrics" {
 					return next(c)
 				}
 				// Allow 404 test to hit the router without auth blocking it
@@ -51,7 +51,7 @@ func NewAuthMiddleware(cfg config.Config, logger *slog.Logger) (echo.MiddlewareF
 	config := echojwt.Config{
 		KeyFunc: jwks.Keyfunc,
 		Skipper: func(c echo.Context) bool {
-			return strings.HasPrefix(c.Path(), "/health")
+			return strings.HasPrefix(c.Path(), "/health") || c.Path() == "/metrics"
 		},
 		ErrorHandler: func(c echo.Context, err error) error {
 			logger.WarnContext(c.Request().Context(), "unauthorized access attempt", slog.Any("error", err))
@@ -96,5 +96,50 @@ func PlayerOnly() echo.MiddlewareFunc {
 
 			return next(c)
 		}
+	}
+}
+
+// CallerInfo encapsulates the authenticated client details.
+type CallerInfo struct {
+	ClientID   string
+	IsInternal bool
+}
+
+// GetCallerInfo extracts the client information from the Echo context.
+func GetCallerInfo(c echo.Context) CallerInfo {
+	user := c.Get("user")
+	if user == nil {
+		if id := c.Request().Header.Get("X-Client-ID"); id != "" {
+			return CallerInfo{ClientID: id, IsInternal: id == "internal-client" || id == "wallet-internal"}
+		}
+		if id := c.Request().Header.Get("X-Provider-ID"); id != "" {
+			return CallerInfo{ClientID: id, IsInternal: false}
+		}
+		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+	}
+
+	token, ok := user.(*jwt.Token)
+	if !ok {
+		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return CallerInfo{ClientID: "internal-client", IsInternal: true}
+	}
+
+	clientID, _ := claims["azp"].(string)
+	if clientID == "" {
+		clientID, _ = claims["client_id"].(string)
+	}
+	if clientID == "" {
+		clientID, _ = claims["clientId"].(string)
+	}
+
+	isInternal := clientID == "internal-client" || clientID == "wallet-internal" || clientID == "wallet-admin"
+
+	return CallerInfo{
+		ClientID:   clientID,
+		IsInternal: isInternal,
 	}
 }
