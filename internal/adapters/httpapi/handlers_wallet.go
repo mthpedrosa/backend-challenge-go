@@ -5,22 +5,30 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
+	"github.com/mthpedrosa/backend-challenge-go/internal/domain"
 )
 
 type WalletHandler struct {
-	openWalletUC *usecase.OpenWalletUseCase
-	readWalletUC *usecase.ReadWalletUseCase
-	readLedgerUC *usecase.ReadLedgerUseCase
+	openWalletUC      *usecase.OpenWalletUseCase
+	readWalletUC      *usecase.ReadWalletUseCase
+	readLedgerUC      *usecase.ReadLedgerUseCase
+	reconcileWalletUC *usecase.ReconcileWalletUseCase
 }
 
-func NewWalletHandler(openUC *usecase.OpenWalletUseCase, readUC *usecase.ReadWalletUseCase, ledgerUC *usecase.ReadLedgerUseCase) *WalletHandler {
-	return &WalletHandler{openWalletUC: openUC, readWalletUC: readUC, readLedgerUC: ledgerUC}
+func NewWalletHandler(openUC *usecase.OpenWalletUseCase, readUC *usecase.ReadWalletUseCase, ledgerUC *usecase.ReadLedgerUseCase, reconcileUC *usecase.ReconcileWalletUseCase) *WalletHandler {
+	return &WalletHandler{
+		openWalletUC:      openUC,
+		readWalletUC:      readUC,
+		readLedgerUC:      ledgerUC,
+		reconcileWalletUC: reconcileUC,
+	}
 }
 
 func (h *WalletHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/wallets", h.OpenWallet)
 	e.GET("/wallets/:walletId", h.GetWallet)
 	e.GET("/wallets/:walletId/ledger", h.GetLedger)
+	e.POST("/wallets/:walletId/reconciliation", h.ReconcileWallet)
 }
 
 type OpenWalletRequest struct {
@@ -34,6 +42,11 @@ type OpenWalletResponse struct {
 }
 
 func (h *WalletHandler) OpenWallet(c echo.Context) error {
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" {
+		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
+	}
+
 	var req OpenWalletRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -60,6 +73,11 @@ type WalletResponse struct {
 }
 
 func (h *WalletHandler) GetWallet(c echo.Context) error {
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" {
+		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
+	}
+
 	id := c.Param("walletId")
 	w, err := h.readWalletUC.Execute(c.Request().Context(), id)
 	if err != nil {
@@ -91,6 +109,11 @@ type LedgerResponse struct {
 }
 
 func (h *WalletHandler) GetLedger(c echo.Context) error {
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" {
+		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
+	}
+
 	id := c.Param("walletId")
 	cursor := c.QueryParam("cursor")
 	// Use 50 as default
@@ -128,5 +151,50 @@ func (h *WalletHandler) GetLedger(c echo.Context) error {
 	return c.JSON(http.StatusOK, LedgerResponse{
 		Items:      res,
 		NextCursor: nextCursor,
+	})
+}
+
+type MoneyResponse struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+type ReconcileWalletResponse struct {
+	WalletID          string        `json:"walletId"`
+	StoredBalance     MoneyResponse `json:"storedBalance"`
+	CalculatedBalance MoneyResponse `json:"calculatedBalance"`
+	Difference        MoneyResponse `json:"difference"`
+	Consistent        bool          `json:"consistent"`
+	CheckedEntries    int64         `json:"checkedEntries"`
+}
+
+func (h *WalletHandler) ReconcileWallet(c echo.Context) error {
+	caller := GetCallerInfo(c)
+	if !caller.IsInternal && caller.ClientID != "" {
+		return domain.WrapDomainError(domain.CodeForbidden, "wallet operations are restricted to internal clients", nil)
+	}
+
+	id := c.Param("walletId")
+	out, err := h.reconcileWalletUC.Execute(c.Request().Context(), id)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, ReconcileWalletResponse{
+		WalletID: out.WalletID,
+		StoredBalance: MoneyResponse{
+			Amount:   out.StoredBalance.FormatDecimal(),
+			Currency: out.StoredBalance.Currency(),
+		},
+		CalculatedBalance: MoneyResponse{
+			Amount:   out.CalculatedBalance.FormatDecimal(),
+			Currency: out.CalculatedBalance.Currency(),
+		},
+		Difference: MoneyResponse{
+			Amount:   out.Difference.FormatDecimal(),
+			Currency: out.Difference.Currency(),
+		},
+		Consistent:     out.Consistent,
+		CheckedEntries: out.CheckedEntries,
 	})
 }
