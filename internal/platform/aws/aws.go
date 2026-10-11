@@ -27,9 +27,16 @@ func NewConfig(cfg config.Config) (aws.Config, error) {
 		awsconfig.WithRegion(cfg.AWS.Region),
 	}
 
-	if cfg.AWS.AccessKeyID != "" && cfg.AWS.SecretAccessKey != "" {
+	accessKey := cfg.AWS.AccessKeyID
+	secretKey := cfg.AWS.SecretAccessKey
+	if cfg.AWS.EndpointURL != "" && (accessKey == "" || secretKey == "") {
+		accessKey = "test"
+		secretKey = "test"
+	}
+
+	if accessKey != "" && secretKey != "" {
 		opts = append(opts, awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(cfg.AWS.AccessKeyID, cfg.AWS.SecretAccessKey, ""),
+			credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 		))
 	}
 

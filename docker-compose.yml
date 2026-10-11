@@ -8,6 +8,8 @@ services:
       JWKS_URL: http://keycloak:8081/realms/wallet-realm/protocol/openid-connect/certs
       DATABASE_URL: postgres://${POSTGRES_USER:-wallet}:${POSTGRES_PASSWORD:-wallet}@postgres:5432/${POSTGRES_DB:-wallet}?sslmode=disable
       AWS_ENDPOINT_URL: http://ministack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       SQS_OUTBOX_QUEUE_URL: http://ministack:4566/000000000000/outbox.fifo
       SQS_INBOX_QUEUE_URL: http://ministack:4566/000000000000/wager-transactions.fifo
     ports:
@@ -62,6 +64,7 @@ services:
     ports:
       - "${MINISTACK_PORT:-4566}:4566"
     volumes:
+      - ./deploy/sqs/init-queues.sh:/etc/localstack/init/ready.d/init-queues.sh:ro
       - ./deploy/sqs/init-queues.sh:/docker-entrypoint-initaws.d/init-queues.sh:ro
     healthcheck:
       # The image ships Python but neither curl nor wget.
