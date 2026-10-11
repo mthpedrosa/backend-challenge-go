@@ -43,6 +43,22 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector
 	$(GO) test -race -count=1 $(PKG)
 
+.PHONY: test-e2e
+test-e2e: ## Run end-to-end and concurrency test suite with race detector
+	$(GO) test -v -race -count=1 ./test/e2e/...
+
+.PHONY: migrate-up
+migrate-up: ## Run database migrations up
+	$(GO) run ./cmd/migrate up
+
+.PHONY: migrate-down
+migrate-down: ## Roll back the last database migration
+	$(GO) run ./cmd/migrate down
+
+.PHONY: migrate-status
+migrate-status: ## Show database migration status
+	$(GO) run ./cmd/migrate status
+
 .PHONY: fmt
 fmt: ## Format code
 	gofmt -w .
