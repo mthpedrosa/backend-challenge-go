@@ -9,6 +9,7 @@ import (
 
 	"github.com/mthpedrosa/backend-challenge-go/internal/app/usecase"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/wager"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 type PendingReferenceWorker struct {
@@ -78,6 +79,7 @@ func (w *PendingReferenceWorker) processBatch() {
 	}
 
 	for _, tx := range txs {
+		observability.Metrics.PendingReferenceRetries.Inc()
 		if err := w.uc.Execute(ctx, tx.ID()); err != nil {
 			w.logger.Error("failed to resolve pending reference",
 				slog.String("txId", tx.ID()),

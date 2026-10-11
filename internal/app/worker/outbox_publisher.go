@@ -14,6 +14,7 @@ import (
 
 	"github.com/mthpedrosa/backend-challenge-go/internal/config"
 	"github.com/mthpedrosa/backend-challenge-go/internal/domain/event"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 // OutboxPublisher is a background worker that polls the outbox table and publishes events to SQS.
@@ -103,6 +104,7 @@ func (p *OutboxPublisher) processBatch() {
 				slog.String("eventId", e.EventID),
 				slog.Any("error", err),
 			)
+			observability.Metrics.OutboxPublishErrorTotal.Inc()
 			continue
 		}
 
@@ -111,9 +113,11 @@ func (p *OutboxPublisher) processBatch() {
 				slog.String("eventId", e.EventID),
 				slog.Any("error", err),
 			)
+			observability.Metrics.OutboxPublishErrorTotal.Inc()
 			// we don't abort, it will be retried (at-least-once delivery semantics)
 		} else {
 			p.logger.Debug("published event successfully", slog.String("eventId", e.EventID))
+			observability.Metrics.OutboxPublishSuccessTotal.Inc()
 		}
 	}
 }

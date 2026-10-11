@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/mthpedrosa/backend-challenge-go/internal/platform/correlation"
+	"github.com/mthpedrosa/backend-challenge-go/internal/platform/observability"
 )
 
 // maxCorrelationIDLength bounds client supplied ids to avoid log abuse.
@@ -46,6 +47,7 @@ func RequestLogger(logger *slog.Logger) echo.MiddlewareFunc {
 			}
 			req := c.Request()
 			status := c.Response().Status
+			latency := time.Since(start)
 			level := slog.LevelInfo
 			switch {
 			case status >= http.StatusInternalServerError:
@@ -57,8 +59,14 @@ func RequestLogger(logger *slog.Logger) echo.MiddlewareFunc {
 				slog.String("method", req.Method),
 				slog.String("route", c.Path()),
 				slog.Int("status", status),
-				slog.Duration("latency", time.Since(start)),
+				slog.Duration("latency", latency),
 			)
+
+			// Record prometheus metrics
+			statusStr := fmt.Sprintf("%d", status)
+			observability.Metrics.HTTPRequestsTotal.WithLabelValues(req.Method, c.Path(), statusStr).Inc()
+			observability.Metrics.HTTPRequestDuration.WithLabelValues(req.Method, c.Path()).Observe(latency.Seconds())
+
 			return nil
 		}
 	}

@@ -11,6 +11,7 @@ var Module = fx.Module("httpapi",
 		AsRoutes(NewHealthHandler),
 		AsRoutes(NewWalletHandler),
 		AsRoutes(NewWagerHandler),
+		AsRoutes(NewMetricsHandler),
 	),
 	// Force the server to be constructed so its lifecycle hooks are registered.
 	fx.Invoke(func(*Server) {}),
